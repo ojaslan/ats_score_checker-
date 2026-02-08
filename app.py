@@ -8,11 +8,9 @@ from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ---------- NLTK CLOUD FIX ----------
+# ================= NLTK CLOUD FIX =================
 NLTK_PATH = "/tmp/nltk_data"
-if not os.path.exists(NLTK_PATH):
-    os.makedirs(NLTK_PATH)
-
+os.makedirs(NLTK_PATH, exist_ok=True)
 nltk.data.path.append(NLTK_PATH)
 
 for pkg in ["punkt", "stopwords", "wordnet"]:
@@ -24,19 +22,15 @@ for pkg in ["punkt", "stopwords", "wordnet"]:
 stop_words = set(stopwords.words("english"))
 lemmatizer = WordNetLemmatizer()
 
-# ---------- STREAMLIT CONFIG ----------
+# ================= STREAMLIT CONFIG =================
 st.set_page_config("Cloud ATS", layout="wide")
-st.title("Intelligent ATS")
+st.title("🧠 Intelligent ATS (LinkedIn-Style Skills)")
 
-# ---------- PDF EXTRACT ----------
+# ================= UTIL FUNCTIONS =================
 def extract_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text.lower()
+    return " ".join([page.get_text() for page in doc]).lower()
 
-# ---------- PREPROCESS ----------
 def preprocess(text):
     text = re.sub(r"[^a-z0-9 ]", " ", text)
     tokens = nltk.word_tokenize(text)
@@ -47,16 +41,17 @@ def preprocess(text):
     ]
     return " ".join(tokens)
 
-# ---------- EXPERIENCE ----------
 def extract_experience(text):
     matches = re.findall(r"(\d+\.?\d*)\s+year", text)
     return max([float(x) for x in matches], default=0)
 
-# ---------- SKILL MATCH ----------
+def normalize_skill(skill):
+    return skill.lower().strip().replace("-", " ")
+
 def skill_match(text, skills):
     return [s for s in skills if s in text]
 
-# ---------- SCORING ----------
+# ================= SCORING ENGINE =================
 def ats_score(resume, role, req, opt, min_exp):
     exp = extract_experience(resume)
 
@@ -78,29 +73,35 @@ def ats_score(resume, role, req, opt, min_exp):
     if len(resume.split()) < 150:
         penalty += 5
 
-    score = min(round(req_score + opt_score + exp_score + sem_score - penalty, 2), 88)
+    final_score = min(round(req_score + opt_score + exp_score + sem_score - penalty, 2), 88)
 
-    return score, req_match, opt_match, exp
+    return final_score, req_match, opt_match, exp
 
-# ================= UI (ONE SCREEN) =================
+# ================= ONE-SCREEN UI =================
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("👔 HR Job Configuration")
 
     role_text = st.text_area(
-        "Role Description",
+        "Role Description (Responsibilities, tools, domain)",
         height=200
     )
 
-    req_skills = st.text_input(
-        "Required Skills (comma separated)",
-        "python, sql, nlp"
+    st.markdown("### 🧩 Required Skills (type & press Enter)")
+    required_skills = st.multiselect(
+        label="",
+        options=[],
+        default=[],
+        help="Type a skill and press Enter"
     )
 
-    opt_skills = st.text_input(
-        "Nice-to-Have Skills",
-        "aws, docker"
+    st.markdown("### ⭐ Nice-to-Have Skills")
+    optional_skills = st.multiselect(
+        label=" ",
+        options=[],
+        default=[],
+        help="Optional skills"
     )
 
     min_exp = st.number_input(
@@ -113,25 +114,29 @@ with col2:
     st.subheader("📄 Resume Upload")
     resume = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 
-    if resume and role_text:
-        if st.button("Evaluate Candidate"):
-            with st.spinner("Evaluating resume..."):
+    if resume and role_text and required_skills:
+        if st.button("🚀 Evaluate Candidate"):
+            with st.spinner("Evaluating resume…"):
                 resume_raw = extract_pdf(resume)
                 resume_clean = preprocess(resume_raw)
                 role_clean = preprocess(role_text)
 
+                req_norm = [normalize_skill(s) for s in required_skills]
+                opt_norm = [normalize_skill(s) for s in optional_skills]
+
                 score, req_m, opt_m, exp = ats_score(
                     resume_clean,
                     role_clean,
-                    [s.strip().lower() for s in req_skills.split(",") if s],
-                    [s.strip().lower() for s in opt_skills.split(",") if s],
+                    req_norm,
+                    opt_norm,
                     min_exp
                 )
 
             st.success("Evaluation Complete ✅")
+
             st.metric("Overall Match Score (%)", score)
-            st.write("✅ Matched Required Skills:", ", ".join(req_m))
-            st.write("❌ Missing Required Skills:",
-                     ", ".join(set(req_skills.split(",")) - set(req_m)))
-            st.write("⭐ Optional Skills:", ", ".join(opt_m))
-            st.write("🕒 Experience Detected:", exp, "years")
+            st.write("✅ **Matched Required Skills:**", ", ".join(req_m))
+            st.write("❌ **Missing Required Skills:**",
+                     ", ".join(set(req_norm) - set(req_m)))
+            st.write("⭐ **Matched Optional Skills:**", ", ".join(opt_m))
+            st.write("🕒 **Experience Detected:**", exp, "years")
