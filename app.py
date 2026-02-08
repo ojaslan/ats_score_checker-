@@ -1,142 +1,88 @@
 import streamlit as st
-import fitz
 import nltk
 import re
-import os
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from nltk.tokenize import word_tokenize
+from collections import Counter
+import pdfplumber
 
-# ================= NLTK CLOUD FIX =================
-NLTK_PATH = "/tmp/nltk_data"
-os.makedirs(NLTK_PATH, exist_ok=True)
-nltk.data.path.append(NLTK_PATH)
+nltk.download("punkt")
+nltk.download("stopwords")
+STOP_WORDS = set(stopwords.words("english"))
 
-for pkg in ["punkt", "stopwords", "wordnet"]:
-    try:
-        nltk.data.find(pkg)
-    except LookupError:
-        nltk.download(pkg, download_dir=NLTK_PATH)
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r"[^a-zA-Z+ ]", " ", text)
+    tokens = word_tokenize(text)
+    tokens = [t for t in tokens if t not in STOP_WORDS]
+    return tokens
 
-stop_words = set(stopwords.words("english"))
-lemmatizer = WordNetLemmatizer()
+def extract_text_from_pdf(uploaded_file):
+    text = ""
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() or ""
+    return text
 
-# ================= STREAMLIT CONFIG =================
-st.set_page_config("Cloud ATS", layout="wide")
-st.title("🧠 Intelligent ATS (LinkedIn-Style Skills)")
+def score_resume(resume_text, jd_text, skills):
+    resume_tokens = clean_text(resume_text)
+    jd_tokens = clean_text(jd_text)
 
-# ================= UTIL FUNCTIONS =================
-def extract_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    return " ".join([page.get_text() for page in doc]).lower()
+    resume_counter = Counter(resume_tokens)
 
-def preprocess(text):
-    text = re.sub(r"[^a-z0-9 ]", " ", text)
-    tokens = nltk.word_tokenize(text)
-    tokens = [
-        lemmatizer.lemmatize(t)
-        for t in tokens
-        if t not in stop_words and len(t) > 2
-    ]
-    return " ".join(tokens)
+    jd_match = sum(1 for w in set(jd_tokens) if w in resume_counter)
+    jd_score = (jd_match / max(len(set(jd_tokens)), 1)) * 60
 
-def extract_experience(text):
-    matches = re.findall(r"(\d+\.?\d*)\s+year", text)
-    return max([float(x) for x in matches], default=0)
+    matched_skills = [s for s in skills if s.lower() in resume_text.lower()]
+    skill_score = (len(matched_skills) / max(len(skills), 1)) * 40
 
-def normalize_skill(skill):
-    return skill.lower().strip().replace("-", " ")
+    final_score = round(jd_score + skill_score, 2)
+    return final_score, matched_skills
 
-def skill_match(text, skills):
-    return [s for s in skills if s in text]
+st.set_page_config(page_title="ATS Resume Scorer", layout="wide")
 
-# ================= SCORING ENGINE =================
-def ats_score(resume, role, req, opt, min_exp):
-    exp = extract_experience(resume)
+st.title("ATS Resume Scorer")
+st.caption("HR defines JD and skills. Resume scored using NLP.")
 
-    req_match = skill_match(resume, req)
-    opt_match = skill_match(resume, opt)
-
-    req_score = (len(req_match)/len(req))*40 if req else 0
-    opt_score = (len(opt_match)/len(opt))*15 if opt else 0
-
-    exp_score = min(exp/min_exp, 1)*25 if min_exp > 0 else 15
-
-    tfidf = TfidfVectorizer(ngram_range=(1,2))
-    vectors = tfidf.fit_transform([role, resume])
-    sem_score = cosine_similarity(vectors[0:1], vectors[1:2])[0][0] * 20
-
-    penalty = 0
-    if resume.count("python") > 15:
-        penalty += 5
-    if len(resume.split()) < 150:
-        penalty += 5
-
-    final_score = min(round(req_score + opt_score + exp_score + sem_score - penalty, 2), 88)
-
-    return final_score, req_match, opt_match, exp
-
-# ================= ONE-SCREEN UI =================
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("👔 HR Job Configuration")
+    st.subheader("HR Inputs")
 
-    role_text = st.text_area(
-        "Role Description (Responsibilities, tools, domain)",
-        height=200
-    )
+    jd_text = st.text_area("Job Description", height=200)
 
-    st.markdown("### 🧩 Required Skills (type & press Enter)")
-    required_skills = st.multiselect(
-        label="",
-        options=[],
-        default=[],
-        help="Type a skill and press Enter"
-    )
+    if "skills" not in st.session_state:
+        st.session_state.skills = []
 
-    st.markdown("### ⭐ Nice-to-Have Skills")
-    optional_skills = st.multiselect(
-        label=" ",
-        options=[],
-        default=[],
-        help="Optional skills"
-    )
+    skill_input = st.text_input("Add Skill")
 
-    min_exp = st.number_input(
-        "Minimum Experience (years)",
-        min_value=0.0,
-        step=0.5
-    )
+    if st.button("Add Skill"):
+        if skill_input and skill_input not in st.session_state.skills:
+            st.session_state.skills.append(skill_input)
+
+    if st.session_state.skills:
+        for i, skill in enumerate(st.session_state.skills):
+            c1, c2 = st.columns([4, 1])
+            c1.write(skill)
+            if c2.button("Remove", key=f"r{i}"):
+                st.session_state.skills.pop(i)
+                st.rerun()
 
 with col2:
-    st.subheader("📄 Resume Upload")
-    resume = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
+    st.subheader("Resume Upload")
 
-    if resume and role_text and required_skills:
-        if st.button("🚀 Evaluate Candidate"):
-            with st.spinner("Evaluating resume…"):
-                resume_raw = extract_pdf(resume)
-                resume_clean = preprocess(resume_raw)
-                role_clean = preprocess(role_text)
+    uploaded_file = st.file_uploader("Upload Resume PDF", type=["pdf"])
 
-                req_norm = [normalize_skill(s) for s in required_skills]
-                opt_norm = [normalize_skill(s) for s in optional_skills]
+    if uploaded_file and jd_text and st.session_state.skills:
+        resume_text = extract_text_from_pdf(uploaded_file)
+        score, matched_skills = score_resume(
+            resume_text,
+            jd_text,
+            st.session_state.skills
+        )
 
-                score, req_m, opt_m, exp = ats_score(
-                    resume_clean,
-                    role_clean,
-                    req_norm,
-                    opt_norm,
-                    min_exp
-                )
-
-            st.success("Evaluation Complete ✅")
-
-            st.metric("Overall Match Score (%)", score)
-            st.write("✅ **Matched Required Skills:**", ", ".join(req_m))
-            st.write("❌ **Missing Required Skills:**",
-                     ", ".join(set(req_norm) - set(req_m)))
-            st.write("⭐ **Matched Optional Skills:**", ", ".join(opt_m))
-            st.write("🕒 **Experience Detected:**", exp, "years")
+        st.metric("ATS Score", f"{score} / 100")
+        st.write("Matched Skills:")
+        st.write(", ".join(matched_skills) if matched_skills else "None")
+    else:
+        st.info("Add JD, skills and upload resume")
