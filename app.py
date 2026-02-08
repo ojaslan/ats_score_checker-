@@ -26,7 +26,7 @@ lemmatizer = WordNetLemmatizer()
 
 # ---------- STREAMLIT CONFIG ----------
 st.set_page_config("Cloud ATS", layout="wide")
-st.title("☁️ Intelligent ATS – Cloud Edition (NLTK)")
+st.title("Intelligent ATS")
 
 # ---------- PDF EXTRACT ----------
 def extract_pdf(file):
